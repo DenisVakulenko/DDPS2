@@ -1,0 +1,10 @@
+<a href="/polls/">home</a><br>
+{% if list %}
+    <ul>
+    {% for i in list %}
+        <li><a href="/polls/addsong&id={{ i.id }}">{{ i.author }} - {{ i.name }}</a></li>
+    {% endfor %}
+    </ul>
+{% else %}
+    <p>No items.</p>
+{% endif %}

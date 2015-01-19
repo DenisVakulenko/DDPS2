@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+ <head>
+  <meta charset="utf-8">
+  <title>Allow data access</title>
+ </head>
+ <body>
+ 	Allow data access?
+    <form action="" method='POST'>
+    	{% csrf_token %}
+        <input type='submit' value='allow'>
+    </form>
+ </body>
+</html>
