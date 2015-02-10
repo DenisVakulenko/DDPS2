@@ -25,3 +25,13 @@ class SongUser(models.Model):
 	songID = models.ForeignKey(Song)
 	userID = models.ForeignKey(User)
 
+
+# class Applications(models.Model):
+# 	secret = models.ForeignKey(Song)
+# 	appid = models.ForeignKey(User)
+
+
+# class Tokens(models.Model):
+# 	token = models.ForeignKey(Song)
+# 	refrtoken = models.ForeignKey(User)
+# 	exp = models.ForeignKey(Song)

@@ -1,6 +1,7 @@
 from django.shortcuts import render, redirect
 from django.http import HttpResponse
 from django.template import RequestContext, loader
+from django.views.decorators.csrf import csrf_exempt
 from polls import forms
 from polls import models
 
@@ -8,6 +9,7 @@ from polls.models import User, Song
 
 import requests
 import json
+import urllib, urllib2
 
 
 def index(request):
@@ -77,19 +79,26 @@ def app_privatedata(request):
         if code is None:
             return "bad request"
 
-        k = requests.post('http://127.0.0.1:8000/polls/oauth2/gettoken?client_id=' + client_id + '&client_secret=' + client_secret + '&code=' + code)
-        raise Exception(str(k.text))
-        if k.status_code/100 != 2:
-            return "Internal request error"
-        access_token = k.json()["access_token"]
 
-        url = 'http://127.0.0.1:8000/polls/oauth2/getprivate?oauth_token=' + access_token
+        # k = requests.post('http://127.0.0.1:8000/polls/oauth2/gettoken?client_id=' + client_id + '&client_secret=' + client_secret + '&code=' + code)
+
+        post_data = [('client_id',client_id),('client_secret',client_secret),('code',code),]     # a sequence of two element tuples
+        k = urllib2.urlopen('http://127.0.0.1:8000/polls/oauth2/gettoken/', urllib.urlencode(post_data))
+        js = k.read()
+        
+        # if k.status_code/100 != 2:
+        #     return "Internal request error"
+        # raise Exception(str(js))
+        access_token = json.loads(js) # k.json()["access_token"]
+
+        access_token = access_token["access_token"]
+
+        url = 'http://127.0.0.1:8000/polls/oauth2/getprivate/?page=1&oauth_token=' + access_token
         response = requests.get(url)
         if response.status_code/100 != 2:
             return "Internal request error"
 
-        return HttpResponse(response.json())
-
+        return HttpResponse(response)
 
 def oauth_grant(request):
 	if request.method == 'POST':		
@@ -100,21 +109,23 @@ def oauth_grant(request):
 
 		return render(request, "oauth.html")
 
+@csrf_exempt
+def test2(request):
+	if request.method == 'POST':
+		response_data = {}
+		response_data['access_token'] = 'tokentoken'
+		return HttpResponse(json.dumps(response_data), content_type="application/json")
+	response_data = {}
+	response_data['access_token'] = 'get'
+	return HttpResponse(json.dumps(response_data), content_type="application/json")
+
+@csrf_exempt
 def oauth_token(request):
 	if request.method == 'POST':
-		return HttpResponse("123");
-		# cid = request.POST['client_id']
-		# cs = request.POST['client_secret']
+		cid = request.POST['client_id']
+		cs = request.POST['client_secret']
 
-		# if cid == client_id and cs == client_secret and request.POST['code'] == code:
-		# 	response_data = {}
-		# 	response_data['access_token'] = 'tokentoken'
-		# 	return HttpResponse(json.dumps(response_data), content_type="application/json")
-	if request.method == 'GET': # 'POST':
-		cid = request.GET['client_id']
-		cs = request.GET['client_secret']
-
-		if cid == client_id and cs == client_secret and request.GET['code'] == code:
+		if cid == client_id and cs == client_secret and request.POST['code'] == code:
 			response_data = {}
 			response_data['access_token'] = 'tokentoken'
 			return HttpResponse(json.dumps(response_data), content_type="application/json")
@@ -123,15 +134,35 @@ def oauth_token(request):
 	return HttpResponse(json.dumps(response_data), content_type="application/json")
 
 
-def oauth_private(request):
-    try:
-        request.GET['oauth_token']
-        records = Song.objects.all()
-        records_json = [rec.dict() for rec in records]
-        return HttpResponse(json.dumps(records_json), content_type="application/json")
-    except Exception as e:
-        return json.dumps({'error': str(e)})
+from django.core.paginator import Paginator
 
+@csrf_exempt
+def oauth_private(request):
+	try:
+		if request.GET['oauth_token'] == 'tokentoken':
+			records = Song.objects.all()
+			p = Paginator([rec.dict() for rec in records], 2)
+
+			if 'page' in request.GET:
+				page = request.GET.get('page')
+			else:
+				page = 1
+
+			try:
+				records_json = p.page(page).object_list
+			except PageNotAnInteger:
+				records_json = p.page(1).object_list
+			except EmptyPage:
+				records_json = p.page(p.num_pages).object_list
+
+			c = json.dumps(records_json)
+			return HttpResponse('{ "page" : ' + str(page) + ', "pages" : ' + str(p.num_pages) + ', "content" : ' + c + '}', content_type="application/json")
+		else:
+			return HttpResponse(json.dumps({'error': 'bad token'}), content_type="application/json")
+	except Exception as e:
+		return HttpResponse(json.dumps({'error': str(e)}), content_type="application/json")
+
+@csrf_exempt
 def oauth_public(request):
     try:
         records = Song.objects.all()
@@ -139,21 +170,6 @@ def oauth_public(request):
         return HttpResponse(json.dumps(records_json), content_type="application/json")
     except Exception as e:
         return json.dumps({'error': str(e)})
-
-
-def execute_query(self, query):
-    self.connection = sqlite3.connect(self.db_name)
-    self.connection.row_factory = sqlite3.Row
-    self.cursor = self.connection.cursor()
-    records = self.cursor.execute(query).fetchall()
-    self.connection.commit()
-    self.connection.close()
-    return records
-
-def execute_and_return_json(self, query):
-    records = self.execute_query(query)
-    records_json = [dict(rec) for rec in records]
-    return records_json
 
 
 def allusers(request):
