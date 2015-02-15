@@ -13,7 +13,8 @@ urlpatterns = patterns('',
 
     url(r'^oauth2/getgrant/$', views.oauth_grant),
     url(r'^oauth2/gettoken/$', views.oauth_token),
-    url(r'^oauth2/test2/$', views.test2),
+    url(r'^oauth2/me/$', views.oauth_me),
+    # url(r'^oauth2/test2/$', views.test2),
     url(r'^oauth2/getprivate/$', views.oauth_private),
     url(r'^oauth2/getpublic/$', views.oauth_public),
 

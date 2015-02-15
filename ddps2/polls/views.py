@@ -1,5 +1,5 @@
 from django.shortcuts import render, redirect
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseRedirect, HttpResponse
 from django.template import RequestContext, loader
 from django.views.decorators.csrf import csrf_exempt
 from polls import forms
@@ -10,6 +10,12 @@ from polls.models import User, Song
 import requests
 import json
 import urllib, urllib2
+
+
+
+def debug(msg):
+    print "DEBUG: " + str(msg)
+
 
 
 def index(request):
@@ -64,11 +70,12 @@ def logout(request):
 client_id = '123123'
 client_secret = 'secretsecret'
 token = 'tokentoken'
+refresh_token = 'rfr_token'
 code = 'codecodecode'
 
 
 def test(request):
-	reqtext = "/polls/oauth2/getgrant?client_id=" + client_id + "&redirect_uri=http://127.0.0.1:8000/polls/app/privatedata"
+	reqtext = "/polls/oauth2/getgrant?response_type=code&response_type=code&client_id=" + client_id + "&redirect_uri=http://127.0.0.1:8000/polls/app/privatedata"
 	return redirect(reqtext)
 
 def app_privatedata(request):
@@ -78,68 +85,267 @@ def app_privatedata(request):
         code = request.GET['code']
         if code is None:
             return "bad request"
-
-
         # k = requests.post('http://127.0.0.1:8000/polls/oauth2/gettoken?client_id=' + client_id + '&client_secret=' + client_secret + '&code=' + code)
 
-        post_data = [('client_id',client_id),('client_secret',client_secret),('code',code),]     # a sequence of two element tuples
+        post_data = [('grant_type','authorization_code'),('client_id',client_id),('client_secret',client_secret),('code',code),]
         k = urllib2.urlopen('http://127.0.0.1:8000/polls/oauth2/gettoken/', urllib.urlencode(post_data))
         js = k.read()
         
         # if k.status_code/100 != 2:
         #     return "Internal request error"
         # raise Exception(str(js))
-        access_token = json.loads(js) # k.json()["access_token"]
-
+        access_token = json.loads(js)
         access_token = access_token["access_token"]
 
-        url = 'http://127.0.0.1:8000/polls/oauth2/getprivate/?page=1&oauth_token=' + access_token
-        response = requests.get(url)
+        url = 'http://127.0.0.1:8000/polls/oauth2/getprivate/?page=2&oauth_token=' + access_token
+
+        response = requests.get(url, headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + access_token})
         if response.status_code/100 != 2:
             return "Internal request error"
 
         return HttpResponse(response)
 
 def oauth_grant(request):
-	if request.method == 'POST':		
+	if request.method == 'POST':
 		return redirect(request.GET['redirect_uri'] + "?code=" + code)
 	else:
+		g = request.GET
+		resp_type = g.get('response_type')
+		client_id = g.get('client_id')
+		redirect_uri = g.get('redirect_uri')
+
+		if redirect_uri is None:
+			return HttpResponseBadRequest('Redirect uri is missing')
+		if resp_type is None or client_id is None:
+			return HttpResponseRedirect(errorInvalidRequest(redirect_uri))
+		if resp_type != 'code':
+			return HttpResponseRedirect(errorResponceType(redirect_uri))
+		if client_id != client_id:
+			return HttpResponseRedirect(errorAccessDenied(redirect_uri))
+
 		if not "user_id" in request.session:
 			return redirect("/polls/login?&oauth=1&client_id={0}&redirect_uri={1}".format(request.GET['client_id'], request.GET['redirect_uri']), 302)
 
 		return render(request, "oauth.html")
 
 @csrf_exempt
-def test2(request):
-	if request.method == 'POST':
-		response_data = {}
-		response_data['access_token'] = 'tokentoken'
-		return HttpResponse(json.dumps(response_data), content_type="application/json")
-	response_data = {}
-	response_data['access_token'] = 'get'
-	return HttpResponse(json.dumps(response_data), content_type="application/json")
-
-@csrf_exempt
 def oauth_token(request):
 	if request.method == 'POST':
 		cid = request.POST['client_id']
 		cs = request.POST['client_secret']
+		type = request.POST['grant_type']
 
-		if cid == client_id and cs == client_secret and request.POST['code'] == code:
-			response_data = {}
-			response_data['access_token'] = 'tokentoken'
-			return HttpResponse(json.dumps(response_data), content_type="application/json")
+		if type == 'authorization_code':
+			if cid == client_id and cs == client_secret and request.POST['code'] == code:
+				response_data = {}
+				response_data['access_token'] = token
+				response_data['refresh_token'] = refresh_token
+				response_data['token_type'] = "Bearer"
+				response_data['expires_in'] = str(2*60)
+				return HttpResponse(json.dumps(response_data), content_type="application/json")
+			else:
+				return errorInvalidRequestJSON()
+
+		if type == 'refresh_token':
+			if cid == client_id and cs == client_secret and request.POST['refresh_token'] == refresh_token:
+				response_data = {}
+				response_data['access_token'] = token
+				response_data['refresh_token'] = refresh_token
+				response_data['token_type'] = "Bearer"
+				response_data['expires_in'] = str(2*60)
+				return HttpResponse(json.dumps(response_data), content_type="application/json")
+			else:
+				return errorInvalidRequestJSON()
+
+		return errorUnsupportedGrantJSON()
+
 	response_data = {}
 	response_data['error'] = 'invalid parameters'
 	return HttpResponse(json.dumps(response_data), content_type="application/json")
 
 
+
+def errorInvalidRequest(redirect_uri):
+    res = redirect_uri + "?error=" + "invalid_request"
+    debug(res)
+    return res
+def errorResponceType(redirect_uri):
+    res = redirect_uri + "?error=" + "unsupported_responce_type"
+    debug(res)
+    return res
+def errorAccessDenied(redirect_uri):
+    res = redirect_uri + "?error=" + "access_denied"
+    debug(res)
+    return res
+def errorUnathourized(redirect_uri):
+    res = redirect_uri + "?error=" + "unauthorized_client"
+    debug(res)
+    return res
+
+def errorInvalidRequestJSON(redirect_uri=None):
+    j = json.dumps({"error": "invalid_request"})
+    debug("invalid_request")
+    return HttpResponseBadRequest(j, content_type="application/json")
+    if redirect_uri is None:
+        return HttpResponseBadRequest(j, content_type="application/json")
+    else:
+        return HttpResponseRedirect(redirect_uri, j, content_type="application/json")
+def errorUnsupportedGrantJSON(redirect_uri=None):
+    j = json.dumps({"error": "unsupported_grant_type"})
+    debug("unsupp_grant_type")
+    return HttpResponseBadRequest(j, content_type="application/json")
+    if redirect_uri is None:
+        return HttpResponseBadRequest(j, content_type="application/json")
+    else:
+        return HttpResponseRedirect(redirect_uri, j, content_type="application/json")
+def errorInvalidGrantJSON(redirect_uri=None):
+    j = json.dumps({"error": "invalid_grant"})
+    debug("invalid_grant")
+    return HttpResponseBadRequest(j, content_type="application/json")
+    if redirect_uri is None:
+        return HttpResponseBadRequest(j, content_type="application/json")
+    else:
+        return HttpResponseRedirect(redirect_uri, j, content_type="application/json")
+def errorInvalidClientJSON(redirect_uri=None):
+    j = json.dumps({"error": "invalid_client"})
+    debug("invalid_client")
+    return HttpResponseBadRequest(j, content_type="application/json")
+    if redirect_uri is None:
+        return HttpResponseBadRequest(j, content_type="application/json")
+    else:
+        return HttpResponseRedirect(redirect_uri, j, content_type="application/json")
+
+
+
+
+
+# def getBearerToken(request):
+#     debug("token request")
+#     bearer = None
+
+#     if "HTTP_AUTHORIZATION" in request.META.keys():
+#         b_list = request.META["HTTP_AUTHORIZATION"].split(' ')
+
+#         if len(b_list) > 1 and b_list[0].lower() == 'bearer':
+#             bearer = b_list[1]
+#             debug("Bearer: " + bearer)
+
+#     if bearer is not None:
+#         return models.getAccessToken(bearer)
+
+#     return None
+
+
+
+
+def handleRefreshTokenRequest(request):
+    debug("handle refresh request")
+    post = request.POST
+    refresh_token = post.get('refresh_token')
+
+    token = models.getToken(refresh_token)
+    if token is not None:
+        token.init()
+        token.save()
+        return HttpResponse(token.json(), content_type="application/json")
+
+    return HttpResponseBadRequest("err")
+
+
+def handleAccessTokenRequest(request):
+    debug("handle access token request")
+    post = request.POST
+    code = post.get('code')
+    redirect_uri = post.get('redirect_uri')
+
+    if redirect_uri is None:
+        debug("redirect uri is missing")
+        return HttpResponseBadRequest('Redirect uri is missing')
+
+    if code is None:
+        return errorInvalidRequestJSON(redirect_uri)
+
+    code = models.getAuthcode(code)
+    if code is None:
+        return errorInvalidGrantJSON(redirect_uri)
+
+    if code.redirect_uri != redirect_uri:
+        return errorInvalidGrantJSON(None)
+
+    token = models.Token(user=code.user)
+    token.init()
+    token.save()
+
+    code.delete()
+
+    debug("access_token = " + token.accessToken)
+
+    return HttpResponse(content=token.json(), content_type="application/json")
+
+
+
+@csrf_exempt
+def test2(request):
+	if request.method == 'POST':
+		post = request.POST
+
+		# if not httpBasicAuth(request):
+		#     return errorInvalidClientJSON()
+
+		type = post.get('grant_type')
+
+		if type == 'refresh_token':
+			return handleRefreshTokenRequest(request)
+
+		if type == 'authorization_code':
+			return handleAccessTokenRequest(request)
+
+		# if type == 'refresh_token':
+		# 	response_data = {}
+		# 	response_data['access_token'] = 'tokentoken'
+		# 	response_data['refresh_token'] = 'refrtoken'
+		# 	return HttpResponse(json.dumps(response_data), content_type="application/json")
+
+		# if type == 'authorization_code':
+		# 	response_data = {}
+		# 	response_data['access_token'] = 'tokentoken'
+		# 	response_data['refresh_token'] = 'refrtoken'
+		# 	return HttpResponse(json.dumps(response_data), content_type="application/json")
+			#return handleAccessTokenRequest(request)
+
+	response_data = {}
+	response_data['access_token'] = 'get'
+	return HttpResponse(json.dumps(response_data), content_type="application/json")
+
 from django.core.paginator import Paginator
+
+
+
+def chkToken(request):
+    debug("token request")
+    bearer = None
+
+    if "HTTP_AUTHORIZATION" in request.META.keys():
+        b_list = request.META["HTTP_AUTHORIZATION"].split(' ')
+
+        if len(b_list) > 1 and b_list[0].lower() == 'bearer':
+            bearer = b_list[1]
+            debug("Bearer: " + bearer)
+    
+    if bearer is not None:
+        return bearer == token
+
+    if 'oauth_token' in requests.GET:
+        if request.GET['oauth_token'] == token:
+            return true
+            
+    return false
+
 
 @csrf_exempt
 def oauth_private(request):
 	try:
-		if request.GET['oauth_token'] == 'tokentoken':
+		if chkToken(request):
 			records = Song.objects.all()
 			p = Paginator([rec.dict() for rec in records], 2)
 
@@ -161,6 +367,22 @@ def oauth_private(request):
 			return HttpResponse(json.dumps({'error': 'bad token'}), content_type="application/json")
 	except Exception as e:
 		return HttpResponse(json.dumps({'error': str(e)}), content_type="application/json")
+
+
+@csrf_exempt
+def oauth_me(request):
+    try:
+        if chkToken(request):
+            u = User.objects.get(id__exact=request.session['user_id'])
+            response_data = {}
+            response_data['name'] = u.name
+            response_data['age'] = u.age
+
+            return HttpResponse(json.dumps(response_data), content_type="application/json")
+        return HttpResponse(json.dumps({'error': 'bad token'}), content_type="application/json")
+    except Exception as e:
+        return json.dumps({'error': str(e)})
+
 
 @csrf_exempt
 def oauth_public(request):
