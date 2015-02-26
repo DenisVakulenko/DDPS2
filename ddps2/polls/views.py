@@ -1,11 +1,11 @@
 from django.shortcuts import render, redirect
-from django.http import HttpResponse, HttpResponseRedirect, HttpResponse
+from django.http import HttpResponse, HttpResponseRedirect, HttpResponse, HttpResponseBadRequest
 from django.template import RequestContext, loader
 from django.views.decorators.csrf import csrf_exempt
 from polls import forms
-from polls import models
+from polls import models	
 
-from polls.models import User, Song
+from polls.models import User, Song, Authcode, Token
 
 import requests
 import json
@@ -107,7 +107,14 @@ def app_privatedata(request):
 
 def oauth_grant(request):
 	if request.method == 'POST':
-		return redirect(request.GET['redirect_uri'] + "?code=" + code)
+		global client_id
+		u = User.objects.get(id__exact=request.session['user_id'])
+		c = Authcode(user=u)
+		c.redirect_uri = request.GET['redirect_uri']
+		c.app_id = client_id
+		c.generateCode()
+		c.save()
+		return redirect(request.GET['redirect_uri'] + "?code=" + c.code)
 	else:
 		g = request.GET
 		resp_type = g.get('response_type')
@@ -131,36 +138,61 @@ def oauth_grant(request):
 @csrf_exempt
 def oauth_token(request):
 	if request.method == 'POST':
+		#global token
+		#global refresh_token
+
 		cid = request.POST['client_id']
 		cs = request.POST['client_secret']
 		type = request.POST['grant_type']
 
 		if type == 'authorization_code':
-			if cid == client_id and cs == client_secret and request.POST['code'] == code:
+			code = models.getAuthcode(request.POST['code'])
+			if code is None:
+				return errorInvalidGrantJSON(None)
+			# if code.redirect_uri != redirect_uri:
+			# 	return errorInvalidGrantJSON(None)
+
+			token = models.Token(user=code.user)
+
+			if cid == client_id and cs == client_secret:
+
+				token = Token(user=code.user)
+				token.init()
+				token.save()
+				debug("access_token = " + token.accessToken)
+
 				response_data = {}
-				response_data['access_token'] = token
-				response_data['refresh_token'] = refresh_token
+				response_data['access_token'] = token.accessToken
+				response_data['refresh_token'] = token.refreshToken
 				response_data['token_type'] = "Bearer"
 				response_data['expires_in'] = str(2*60)
+
+				# code.delete()
+
 				return HttpResponse(json.dumps(response_data), content_type="application/json")
-			else:
-				return errorInvalidRequestJSON()
+			response_data = {}
+			response_data['error'] = 'bad parameters'
+			return HttpResponse(json.dumps(response_data), content_type="application/json")
 
 		if type == 'refresh_token':
-			if cid == client_id and cs == client_secret and request.POST['refresh_token'] == refresh_token:
-				response_data = {}
-				response_data['access_token'] = token
-				response_data['refresh_token'] = refresh_token
-				response_data['token_type'] = "Bearer"
-				response_data['expires_in'] = str(2*60)
-				return HttpResponse(json.dumps(response_data), content_type="application/json")
-			else:
+			refresh_token = request.POST['refresh_token']
+			if refresh_token is None:
 				return errorInvalidRequestJSON()
+
+			token = models.getToken(refresh_token)
+			if token is not None:
+				token.init()
+				token.save()
+				return HttpResponse(token.json(), content_type="application/json")
+
+			response_data = {}
+			response_data['error'] = 'bad parameters'
+			return HttpResponse(json.dumps(response_data), content_type="application/json")
 
 		return errorUnsupportedGrantJSON()
 
 	response_data = {}
-	response_data['error'] = 'invalid parameters'
+	response_data['error'] = 'need post'
 	return HttpResponse(json.dumps(response_data), content_type="application/json")
 
 
@@ -333,12 +365,11 @@ def chkToken(request):
             debug("Bearer: " + bearer)
     
     if bearer is not None:
-        return bearer == token
+        return models.findAccessToken(bearer)
 
     if 'oauth_token' in requests.GET:
-        if request.GET['oauth_token'] == token:
-            return true
-            
+        return models.findAccessToken(request.GET['oauth_token'])
+
     return false
 
 
